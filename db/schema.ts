@@ -26,6 +26,7 @@ export const subscriptions = pgTable(
       .references(() => customers.stripeCustomerId, { onDelete: "cascade" }),
     status: text("status").notNull(), // trialing | active | past_due | canceled | unpaid | incomplete | incomplete_expired | paused
     priceId: text("price_id").notNull(),
+    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
     trialEnd: timestamp("trial_end", { withTimezone: true }),

@@ -12,7 +12,11 @@
     "db:migrate": "drizzle-kit migrate",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "vercel-build": "drizzle-kit migrate && next build"
+    "vercel-build": "drizzle-kit migrate && next build",
+    "stripe:setup": "tsx scripts/stripe-setup.ts",
+    "stripe:listen": "tsx scripts/stripe-listen.ts",
+    "test:clock": "tsx scripts/test-clock.ts",
+    "fixtures:record": "tsx scripts/record-fixtures.ts"
   },
   "dependencies": {
     "@chakra-ui/react": "^3.37.0",

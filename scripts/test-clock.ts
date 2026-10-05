@@ -2,10 +2,10 @@
 // No web server needed: events are pulled from the Stripe API and fed through
 // handleEvent, the same function the webhook route calls (each one twice, to prove replay safety).
 //
-//   pnpm tsx scripts/test-clock.ts                 # both scenarios
-//   pnpm tsx scripts/test-clock.ts --only=happy    # or --only=dunning
-//   pnpm tsx scripts/test-clock.ts --keep-clock    # don't delete the clocks (inspect in the dashboard)
-//   pnpm tsx scripts/test-clock.ts --send-emails   # really send emails via Resend (default: recorded, not sent)
+//   pnpm test:clock                  # both scenarios
+//   pnpm test:clock --only=happy     # or --only=dunning
+//   pnpm test:clock --keep-clock     # don't delete the clocks (inspect in the dashboard)
+//   pnpm test:clock --send-emails    # really send emails via Resend (default: recorded, not sent)
 //
 // Uses DATABASE_URL from .env.local. Takes a few minutes: test clocks advance asynchronously.
 import { randomInt, randomUUID } from "node:crypto";

@@ -17,6 +17,9 @@ const Body = z.object({
   idempotencyKey: z.string().uuid(),
 });
 
+// A public demo: bounds the usage_events rows and meter events one demo user can create per billing period.
+const CREDITS_PER_PERIOD_CAP = 10_000;
+
 const isDuplicateIdentifier = (message: string | undefined) =>
   /identifier/i.test(message ?? "") && /already|duplicate|exists/i.test(message ?? "");
 
@@ -89,6 +92,16 @@ export async function POST(req: Request) {
     if (!customer) return Response.json({ error: "No Stripe customer" }, { status: 409 });
 
     const identifier = `inkwell-usage-${idempotencyKey}`;
+    const [known] = await db.select({ id: usageEvents.id }).from(usageEvents).where(eq(usageEvents.identifier, identifier)).limit(1);
+    if (!known) {
+      const { creditsThisPeriod } = await getUsageSummary(user.id);
+      if (creditsThisPeriod + credits > CREDITS_PER_PERIOD_CAP) {
+        return Response.json(
+          { error: `The demo allows ${CREDITS_PER_PERIOD_CAP.toLocaleString("en-US")} AI credits per billing period.` },
+          { status: 429 },
+        );
+      }
+    }
     await db.insert(usageEvents).values({ userId: user.id, quantity: credits, identifier }).onConflictDoNothing();
     const [event] = await db.select().from(usageEvents).where(eq(usageEvents.identifier, identifier)).limit(1);
     if (!event || event.userId !== user.id) {
@@ -125,5 +138,5 @@ export async function POST(req: Request) {
       credits: event.quantity,
       usage: await getUsageSummary(user.id),
     });
-  });
+  }, { rateLimit: { name: "usage", perMinute: 30 } });
 }

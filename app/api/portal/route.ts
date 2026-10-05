@@ -15,5 +15,5 @@ export async function POST(req: Request) {
       ...(configuration ? { configuration } : {}),
     });
     return Response.json({ url: session.url });
-  });
+  }, { rateLimit: { name: "portal", perMinute: 10 } });
 }

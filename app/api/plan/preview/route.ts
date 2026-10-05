@@ -77,5 +77,5 @@ export async function POST(req: Request) {
       nextPaymentAt: trialing ? iso(sub.trial_end) : iso(newPeriodEnd),
       trialing,
     });
-  });
+  }, { rateLimit: { name: "plan-preview", perMinute: 20 } });
 }

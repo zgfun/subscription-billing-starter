@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 
-/** Every Stripe event type the webhook acts on. The portfolio number "N event types" is HANDLED_EVENTS.length. */
+/** Every Stripe event type the webhook acts on. */
 export const HANDLED_EVENTS = [
   "checkout.session.completed",
   "customer.subscription.created",

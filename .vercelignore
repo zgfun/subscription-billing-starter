@@ -1,0 +1,12 @@
+# The Vercel CLI does not read .gitignore: keep local data and secrets out of CLI deploys.
+.pgdata/
+.env*
+!.env.example
+.venv/
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+docs/*.png

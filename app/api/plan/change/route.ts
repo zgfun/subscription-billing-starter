@@ -86,5 +86,5 @@ export async function POST(req: Request) {
       );
     }
     return Response.json({ entitlement: await getEntitlement(user.id) });
-  });
+  }, { rateLimit: { name: "plan-change", perMinute: 10 } });
 }

@@ -53,6 +53,10 @@ function asyncList<T>(data: T[]) {
 
 const fakeClient = {
   customers: {
+    del: async (id: string) => {
+      fake.calls.push({ method: "customers.del", params: id });
+      return { id, object: "customer", deleted: true };
+    },
     create: async (params: { metadata: Record<string, string> }, options?: unknown) => {
       fake.calls.push({ method: "customers.create", params, options });
       return { id: `cus_route_${++fake.n}_${uid()}`, object: "customer", metadata: params.metadata };
@@ -471,6 +475,63 @@ describe.skipIf(!testDbAvailable)("route handlers (test DB)", async () => {
     });
   });
 
+  describe("guards on signed-in routes", () => {
+    it("refuses cross-site writes before touching the session or Stripe", async () => {
+      const { cookie } = await makeUser();
+      for (const headers of [{ origin: "https://evil.example" }, { "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
+        expect((await checkout.POST(post("/api/checkout", { plan: "monthly" }, cookie, headers))).status).toBe(403);
+        expect((await portal.POST(post("/api/portal", {}, cookie, headers))).status).toBe(403);
+        expect((await usage.POST(post("/api/usage", { credits: 1, idempotencyKey: crypto.randomUUID() }, cookie, headers))).status).toBe(403);
+      }
+      expect(fake.calls).toHaveLength(0);
+      const sameOrigin = await checkout.POST(
+        post("/api/checkout", { plan: "monthly" }, cookie, { origin: "http://localhost:3000", "sec-fetch-site": "same-origin" }),
+      );
+      expect(sameOrigin.status).toBe(200);
+    });
+
+    it("ignores non-JSON bodies (a text/plain form can't smuggle JSON)", async () => {
+      const { cookie } = await makeUser();
+      const res = await checkout.POST(post("/api/checkout", { plan: "monthly" }, cookie, { "content-type": "text/plain" }));
+      expect(res.status).toBe(400);
+      expect(fake.calls).toHaveLength(0);
+    });
+
+    it("rate-limits Stripe-backed routes per user", async () => {
+      const a = await makeUser();
+      const b = await makeUser();
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) statuses.push((await checkout.POST(post("/api/checkout", { plan: "weekly" }, a.cookie))).status);
+      expect(statuses.slice(0, 10).every((s) => s === 400)).toBe(true);
+      expect(statuses[10]).toBe(429);
+      const limited = await checkout.POST(post("/api/checkout", { plan: "weekly" }, a.cookie));
+      expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+      // Another user has their own budget.
+      expect((await checkout.POST(post("/api/checkout", { plan: "weekly" }, b.cookie))).status).toBe(400);
+    });
+  });
+
+  describe("demo cleanup", () => {
+    it("deletes expired demo users with their Stripe customer and rows, and keeps recent ones", async () => {
+      const { cleanupDemoUsers } = await import("@/lib/demo-cleanup");
+      const old = await makeUser();
+      await db.update(users).set({ createdAt: new Date(Date.now() - 8 * 86_400_000) }).where(eq(users.id, old.id));
+      const oldCustomer = await makeCustomer(old.id);
+      await makeSub(oldCustomer, { status: "active" });
+      await db.insert(usageEvents).values({ userId: old.id, quantity: 1, identifier: `inkwell-usage-${crypto.randomUUID()}` });
+      const recent = await makeUser();
+
+      while ((await cleanupDemoUsers()) > 0);
+
+      expect(await db.select().from(users).where(eq(users.id, old.id))).toHaveLength(0);
+      expect(await db.select().from(customers).where(eq(customers.userId, old.id))).toHaveLength(0);
+      expect(await db.select().from(subscriptions).where(eq(subscriptions.customerId, oldCustomer))).toHaveLength(0);
+      expect(await db.select().from(usageEvents).where(eq(usageEvents.userId, old.id))).toHaveLength(0);
+      expect(callsOf("customers.del").map((c) => c.params)).toContain(oldCustomer);
+      expect(await db.select().from(users).where(eq(users.id, recent.id))).toHaveLength(1);
+    });
+  });
+
   describe("POST /api/portal", () => {
     it("creates a portal session for the user's own customer", async () => {
       const { id, cookie } = await makeUser();
@@ -688,6 +749,22 @@ describe.skipIf(!testDbAvailable)("route handlers (test DB)", async () => {
       expect(sent).toContain(stranded);
       const [row] = await db.select().from(usageEvents).where(eq(usageEvents.identifier, stranded));
       expect(row.sentAt).not.toBeNull();
+    });
+
+    it("caps credits per billing period", async () => {
+      const { id, cookie } = await makeUser();
+      await makeSub(await makeCustomer(id), {
+        status: "active",
+        items: [
+          { id: `si_${uid()}`, priceId: PRICES.monthly, periodEnd: Math.floor(Date.now() / 1000) + 86400 * 20 },
+          { id: `si_m_${uid()}`, priceId: PRICES.credits, metered: true, periodEnd: Math.floor(Date.now() / 1000) + 86400 * 20 },
+        ],
+      });
+      await db.insert(usageEvents).values({ userId: id, quantity: 9_995, identifier: `inkwell-usage-${crypto.randomUUID()}`, sentAt: new Date() });
+      expect((await usage.POST(post("/api/usage", { credits: 5, idempotencyKey: crypto.randomUUID() }, cookie))).status).toBe(200);
+      const over = await usage.POST(post("/api/usage", { credits: 1, idempotencyKey: crypto.randomUUID() }, cookie));
+      expect(over.status).toBe(429);
+      expect(callsOf("billing.meterEvents.create")).toHaveLength(1);
     });
 
     it("refuses another user's idempotency key", async () => {

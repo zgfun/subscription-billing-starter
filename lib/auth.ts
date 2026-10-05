@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { db, users, type User } from "@/db";
+import { slidingWindow, tooManyRequests } from "./rate-limit";
+import { forbiddenCrossSite, isCrossSite } from "./request-guard";
 import { readSession, readSessionFromRequest } from "./session";
 
 export class UnauthorizedError extends Error {
@@ -37,10 +39,32 @@ export function unauthorized(): Response {
   return Response.json({ error: "Not signed in" }, { status: 401 });
 }
 
-/** Wraps a route handler: 401 for missing sessions, 502 for Stripe errors, 500 otherwise. */
-export async function withUser(req: Request, handler: (user: User) => Promise<Response>): Promise<Response> {
+const perMinute = slidingWindow(60_000);
+
+export type WithUserOptions = {
+  /** Per-user requests per minute for this route, keyed by `name`. Use it on every route that calls Stripe. */
+  rateLimit?: { name: string; perMinute: number };
+};
+
+/**
+ * Wraps a route handler: 403 for cross-site writes, 401 for missing sessions, 429 over the per-user rate
+ * limit, 502 for Stripe errors, 500 otherwise.
+ */
+export async function withUser(
+  req: Request,
+  handler: (user: User) => Promise<Response>,
+  options: WithUserOptions = {},
+): Promise<Response> {
+  // CSRF defence in depth on top of the SameSite=Lax session cookie.
+  if (req.method !== "GET" && req.method !== "HEAD" && isCrossSite(req)) return forbiddenCrossSite();
   try {
-    return await handler(await requireUser(req));
+    const user = await requireUser(req);
+    if (options.rateLimit) {
+      const { name, perMinute: max } = options.rateLimit;
+      const limit = perMinute(`${name}:${user.id}`, max);
+      if (!limit.ok) return tooManyRequests("Too many requests. Slow down and try again shortly.", limit.retryAfter);
+    }
+    return await handler(user);
   } catch (error) {
     if (error instanceof UnauthorizedError) return unauthorized();
     const err = error as { type?: unknown; message?: unknown; code?: unknown };
@@ -58,7 +82,9 @@ export async function withUser(req: Request, handler: (user: User) => Promise<Re
   }
 }
 
+/** The JSON body, or null. Non-JSON content types are refused, so a cross-site text/plain form can't post JSON. */
 export async function readJson(req: Request): Promise<unknown> {
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) return null;
   try {
     return await req.json();
   } catch {

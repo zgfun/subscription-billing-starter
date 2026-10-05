@@ -1,9 +1,9 @@
 // Saves the most recent real event of each given type from the Stripe test account
 // into fixtures/events/<type>.json, with every email address replaced by demo@inkwell.test.
 //
-//   KEY=$(grep '^STRIPE_SECRET_KEY=' .env.local | cut -d= -f2-)
-//   /Users/panczapeter/.local/bin/stripe trigger invoice.payment_failed --api-key "$KEY"
-//   pnpm tsx scripts/record-fixtures.ts invoice.payment_failed customer.subscription.updated
+//   export STRIPE_API_KEY=$(grep '^STRIPE_SECRET_KEY=' .env.local | cut -d= -f2-)   # env, not --api-key (ps shows args)
+//   stripe trigger invoice.payment_failed
+//   pnpm fixtures:record invoice.payment_failed customer.subscription.updated
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -14,7 +14,7 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 async function main() {
   const types = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   if (types.length === 0) {
-    console.error("usage: pnpm tsx scripts/record-fixtures.ts <event.type> [...]");
+    console.error("usage: pnpm fixtures:record <event.type> [...]");
     process.exit(1);
   }
   const { getStripe } = await import("../lib/stripe");

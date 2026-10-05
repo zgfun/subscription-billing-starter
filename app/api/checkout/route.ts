@@ -88,5 +88,5 @@ export async function POST(req: Request) {
     });
     if (!session.url) return Response.json({ error: "Stripe did not return a Checkout URL" }, { status: 502 });
     return Response.json({ url: session.url, trial });
-  });
+  }, { rateLimit: { name: "checkout", perMinute: 10 } });
 }

@@ -2,6 +2,14 @@
   "name": "subscription-billing-starter",
   "version": "0.1.0",
   "private": true,
+  "description": "Stripe subscription billing done properly in Next.js: Checkout with trials, proration previews, Customer Portal, dunning, metered usage and replay-safe webhooks.",
+  "license": "MIT",
+  "author": "zgfun",
+  "homepage": "https://subscription-billing-starter.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zgfun/subscription-billing-starter"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

@@ -6,18 +6,18 @@ There are three layers:
 
 | Layer | What it proves | Command | Needs |
 | --- | --- | --- | --- |
-| Unit and DB tests (vitest) | Entitlement logic, sync, webhook ledger, routes | `pnpm test` | `TEST_DATABASE_URL` (DB tests skip if it is unreachable) |
+| Unit and DB tests (vitest) | Entitlement logic, sync, webhook ledger, routes | `pnpm test` | `TEST_DATABASE_URL` (DB tests skip with a warning if it is unreachable; set `REQUIRE_DB=1` or `CI=1` to make that a failure) |
 | `stripe listen` + `stripe trigger` | The real route verifies real signatures and handles real payloads | see below | dev server, Stripe CLI |
-| Test clock script | A real 14-day trial converting to paid, and a failed renewal going to dunning | `pnpm tsx scripts/test-clock.ts` | `DATABASE_URL`, `STRIPE_SECRET_KEY` (test mode) |
+| Test clock script | A real 14-day trial converting to paid, and a failed renewal going to dunning | `pnpm test:clock` | `DATABASE_URL`, `STRIPE_SECRET_KEY` (test mode) |
 
 ## 1. Unit and DB tests
 
 ```bash
-pnpm db:local          # Postgres on :5435 (separate terminal)
+pnpm db:local          # Postgres on :5435 with billing + billing_test (separate terminal)
 pnpm test              # or: pnpm vitest run lib/webhooks
 ```
 
-DB-backed tests connect to `TEST_DATABASE_URL` (the `billing_test` database), run the drizzle migrations from `drizzle/` themselves, and clean up their rows. If the database is unreachable they are skipped rather than failed, so the pure unit tests still run anywhere.
+DB-backed tests connect to `TEST_DATABASE_URL` (the `billing_test` database), run the drizzle migrations from `drizzle/` themselves, and clean up their rows. If the database is unreachable they are skipped (with a warning) rather than failed, so the pure unit tests still run anywhere. With `CI=1` or `REQUIRE_DB=1` a missing database fails the run instead.
 
 Stripe is never called from unit tests. The tests pass a fake client (or `vi.mock` `lib/stripe`) whose `subscriptions.retrieve` returns a scripted subscription. That matches the production design: webhook handlers ignore the payload's state and re-fetch the subscription, so the fake only has to answer one question, "what does Stripe say now?".
 
@@ -42,11 +42,11 @@ The number of handled event types is `HANDLED_EVENTS.length` in `lib/webhooks/ev
 
 Shortcut: `STRIPE_CLI=/path/to/stripe PORT=3000 pnpm stripe:listen` reads the key from `.env.local` and forwards exactly `HANDLED_EVENTS` (current Stripe CLI versions require `--events`). It passes the key to the CLI in the `STRIPE_API_KEY` environment variable, not on the command line where `ps` could show it, and redacts `whsec_`/`sk_`/`rk_` values from the CLI's output, so don't expect to see the signing secret there.
 
-The Stripe CLI is at `/Users/panczapeter/.local/bin/stripe` and is not logged in, so give it the key through the environment. Read it from `.env.local` without printing it. Never redirect `stripe listen` output to a shared log file, because its first line contains the signing secret:
+If the Stripe CLI isn't logged in, give it the test key through the environment (`STRIPE_API_KEY`), read from `.env.local` without echoing it. Never redirect `stripe listen` output to a shared log file, because its first line contains the signing secret:
 
 ```bash
 export STRIPE_API_KEY=$(grep '^STRIPE_SECRET_KEY=' .env.local | cut -d= -f2-)
-STRIPE=/Users/panczapeter/.local/bin/stripe
+STRIPE=${STRIPE_CLI:-stripe}
 
 # One-off: write the signing secret straight into .env.local (STRIPE_WEBHOOK_SECRET) without echoing it
 echo "STRIPE_WEBHOOK_SECRET=$($STRIPE listen --print-secret)" >> .env.local
@@ -65,16 +65,16 @@ $STRIPE events resend evt_...
 
 Triggered fixtures create their own customers without `metadata.userId`, so the handler ledgers them and skips them because it cannot map them to a user. That is the intended behaviour for objects that are not ours. To see the full flow, use the app: click "Try the demo", subscribe with card `4242 4242 4242 4242`, and watch `/admin`.
 
-## 3. Test clocks: `scripts/test-clock.ts`
+## 3. Test clocks: `pnpm test:clock`
 
 Some bugs only appear 14 days after signup, when the trial ends. Stripe test clocks let a script fast-forward a customer's time. The script runs against the **real** test-mode account and does not need the web server:
 
 ```bash
 pnpm db:local                                   # if not already running
-pnpm tsx scripts/test-clock.ts                  # both scenarios, ~2-5 minutes
-pnpm tsx scripts/test-clock.ts --only=happy     # or --only=dunning
-pnpm tsx scripts/test-clock.ts --keep-clock     # keep the clock to inspect it in the dashboard
-pnpm tsx scripts/test-clock.ts --send-emails    # really send the emails through Resend (default: recorded only)
+pnpm test:clock                                 # both scenarios, ~2-5 minutes
+pnpm test:clock --only=happy                    # or --only=dunning
+pnpm test:clock --keep-clock                    # keep the clock to inspect it in the dashboard
+pnpm test:clock --send-emails                   # really send the emails through Resend (default: recorded only)
 ```
 
 Each scenario:
@@ -88,7 +88,7 @@ Each scenario:
 
 | Scenario | Card | Assertions after +15 days |
 | --- | --- | --- |
-| `happy` | `pm_card_visa` | DB status `active`, entitlement active and not trialing, trial ended, latest invoice `paid` for 1200 USD, exactly one ledger row per event id, all rows processed |
+| `happy` | `pm_card_visa` | DB status `active`, entitlement active and not trialing, trial ended, latest invoice `paid` for $12.00 (1200 cents), exactly one ledger row per event id, all rows processed |
 | `dunning` | `pm_card_chargeCustomerFail` (attaches fine, every charge declines) | DB status `past_due`, entitlement `pastDue`, exactly one dunning `side_effects` row and one dunning email across both deliveries, one ledger row per event id |
 
 The script prints a PASS/FAIL report and exits non-zero on any failed check. Rows created in `DATABASE_URL` (demo users and ledger entries) are kept so they appear on `/admin`.
